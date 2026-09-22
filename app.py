@@ -15,6 +15,42 @@ DATABASE = "recipes.db"
 
 app = Flask(__name__)
 
+"""User registration endpoint."""
+@app.post("/register")
+def register():
+    data = request.get_json(silent=True) or {}
+
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip()
+    password = (data.get("password") or "").strip()
+
+    if not username or not email or not password:
+        return jsonify({"error": "username, email, and password are required"}), 400
+
+    db = get_db()
+
+    password_hash = generate_password_hash(password)
+
+    try:
+        cursor = db.execute(
+            """
+            INSERT INTO users (username, email, password_hash)
+            VALUES (?, ?, ?)
+            """,
+            (username, email, password_hash),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "username or email already exists"}), 409
+
+    new_id = cursor.lastrowid
+
+    return jsonify({
+        "id": new_id,
+        "username": username,
+        "email": email
+    }), 201
+
 """Password hashing functions."""
 def hash_password(plain_password: str) -> str:
     return generate_password_hash(plain_password)
