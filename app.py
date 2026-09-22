@@ -9,11 +9,20 @@ import sqlite3
 
 from flask import Flask, g, jsonify, request
 
+from werkzeug.security import generate_password_hash, check_password_hash
+
 DATABASE = "recipes.db"
 
 app = Flask(__name__)
 
+"""Password hashing functions."""
+def hash_password(plain_password: str) -> str:
+    return generate_password_hash(plain_password)
 
+def verify_password(stored_hash: str, candidate_password: str) -> bool:
+    return check_password_hash(stored_hash, candidate_password)
+
+"""Database connection functions."""
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(DATABASE)
@@ -21,14 +30,14 @@ def get_db():
         g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
 
-
+""" this function is called automatically when the request context ends, and it closes the database connection if it was opened. """
 @app.teardown_appcontext
 def close_db(exception):
     db = g.pop("db", None)
     if db is not None:
         db.close()
 
-
+"""Helper function to convert a recipe row to a dictionary."""
 def recipe_to_dict(row):
     return {
         "id": row["id"],
@@ -38,18 +47,18 @@ def recipe_to_dict(row):
         "is_public": bool(row["is_public"]),
     }
 
-
+"""API endpoints."""
 @app.get("/")
 def hello():
     return jsonify({"message": "Recipe Box API", "recipes": "/recipes"})
 
-
+"""List all recipes."""
 @app.get("/recipes")
 def list_recipes():
     rows = get_db().execute("SELECT * FROM recipes ORDER BY id").fetchall()
     return jsonify([recipe_to_dict(r) for r in rows])
 
-
+"""Get a single recipe by ID."""
 @app.get("/recipes/<int:recipe_id>")
 def get_recipe(recipe_id):
     row = get_db().execute(
@@ -59,7 +68,7 @@ def get_recipe(recipe_id):
         return jsonify({"error": "recipe not found"}), 404
     return jsonify(recipe_to_dict(row))
 
-
+"""Create a new recipe."""
 @app.post("/recipes")
 def create_recipe():
     data = request.get_json(silent=True)
@@ -85,7 +94,7 @@ def create_recipe():
     ).fetchone()
     return jsonify(recipe_to_dict(row)), 201
 
-
+"""Update an existing recipe."""
 @app.patch("/recipes/<int:recipe_id>")
 def update_recipe(recipe_id):
     data = request.get_json(silent=True)
@@ -117,7 +126,7 @@ def update_recipe(recipe_id):
     ).fetchone()
     return jsonify(recipe_to_dict(row))
 
-
+"""Delete a recipe."""
 @app.delete("/recipes/<int:recipe_id>")
 def delete_recipe(recipe_id):
     db = get_db()
@@ -127,6 +136,6 @@ def delete_recipe(recipe_id):
         return jsonify({"error": "recipe not found"}), 404
     return "", 204
 
-
+"""Run the app."""
 if __name__ == "__main__":
     app.run(debug=True)
