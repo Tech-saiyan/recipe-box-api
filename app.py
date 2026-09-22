@@ -51,6 +51,33 @@ def register():
         "email": email
     }), 201
 
+@app.post("/login")
+def login():
+    data = request.get_json(silent=True) or {}
+
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+
+    if not username or not password:
+        return jsonify({"error": "username and password are required"}), 400
+
+    db = get_db()
+    cursor = db.execute(
+        "SELECT id, username, password_hash FROM users WHERE username = ?",
+        (username,),
+    )
+    user = cursor.fetchone()
+
+    # Unknown username or wrong password → same 401 response
+    if user is None or not verify_password(user["password_hash"], password):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    # Success: return who this is
+    return jsonify({
+        "id": user["id"],
+        "username": user["username"],
+    }), 200
+
 """Password hashing functions."""
 def hash_password(plain_password: str) -> str:
     return generate_password_hash(plain_password)
