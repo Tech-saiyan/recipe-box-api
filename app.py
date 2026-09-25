@@ -7,13 +7,28 @@ That is the point: you will add both, lesson by lesson, in Units 2 and 3.
 
 import sqlite3
 
+import os
+
+import jwt
+
+from datetime import datetime, timedelta
+
+from dotenv import load_dotenv
+
 from flask import Flask, g, jsonify, request
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
 DATABASE = "recipes.db"
 
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is not set")
+
 app = Flask(__name__)
+app.config["SECRET_KEY"] = SECRET_KEY
 
 """User registration endpoint."""
 @app.post("/register")
@@ -72,10 +87,17 @@ def login():
     if user is None or not verify_password(user["password_hash"], password):
         return jsonify({"error": "Invalid credentials"}), 401
 
-    # Success: return who this is
-    return jsonify({
-        "id": user["id"],
+    # ✅ Success: issue a signed JWT carrying identity + expiry
+    payload = {
+        "sub": user["id"],          # subject: who this token is about
         "username": user["username"],
+        "exp": datetime.utcnow() + timedelta(hours=1),
+    }
+
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+    return jsonify({
+        "token": token,
     }), 200
 
 """Password hashing functions."""
