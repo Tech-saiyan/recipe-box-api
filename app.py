@@ -11,6 +11,8 @@ import os
 
 import jwt
 
+from jwt import PyJWTError, ExpiredSignatureError
+
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -89,10 +91,10 @@ def login():
 
     # ✅ Success: issue a signed JWT carrying identity + expiry
     payload = {
-        "sub": user["id"],          # subject: who this token is about
-        "username": user["username"],
-        "exp": datetime.utcnow() + timedelta(hours=1),
-    }
+    "sub": str(user["id"]),     # 👈 make subject a string
+    "username": user["username"],
+    "exp": datetime.utcnow() + timedelta(seconds=60),
+    }       
 
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
@@ -156,6 +158,32 @@ def get_recipe(recipe_id):
 """Create a new recipe."""
 @app.post("/recipes")
 def create_recipe():
+    auth_header = request.headers.get("Authorization", "")
+    print("AUTH HEADER:", repr(auth_header))  # 👈 debug
+
+    parts = auth_header.split()
+    print("PARTS:", parts)  # 👈 debug
+
+    if len(parts) != 2 or parts[0] != "Bearer":
+        print("BAD FORMAT")  # 👈 debug
+        return jsonify({"error": "authentication required"}), 401
+
+    token = parts[1]
+    print("TOKEN START:", token[:40], "LEN:", len(token))  # 👈 debug
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        print("DECODED PAYLOAD:", payload)  # 👈 debug
+    except PyJWTError as e:
+        print("JWT ERROR TYPE:", type(e), "MSG:", str(e))  # 👈 debug
+        return jsonify({"error": "invalid token"}), 401
+
+    user_id = int(payload.get("sub"))  # or just leave as string
+    username = payload.get("username")
+
+    # (no ownership checks yet, just proving we *know* who's calling)
+
+    # ⬇️ your existing recipe creation logic
     data = request.get_json(silent=True)
     if not data or not data.get("title") or not data.get("ingredients"):
         return jsonify({"error": "title and ingredients are required"}), 400
@@ -182,6 +210,27 @@ def create_recipe():
 """Update an existing recipe."""
 @app.patch("/recipes/<int:recipe_id>")
 def update_recipe(recipe_id):
+    # 🔐 Require a valid Bearer token
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split()
+
+    if len(parts) != 2 or parts[0] != "Bearer":
+        return jsonify({"error": "authentication required"}), 401
+
+    token = parts[1]
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except ExpiredSignatureError:
+        return jsonify({"error": "token expired, please log in again"}), 401
+    except PyJWTError:
+        return jsonify({"error": "invalid token"}), 401
+
+    user_id = payload.get("sub")
+    username = payload.get("username")
+    # (we're not using these yet for ownership — just proving identity)
+
+    # ⬇️ existing update logic
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "a JSON body is required"}), 400
@@ -214,11 +263,32 @@ def update_recipe(recipe_id):
 """Delete a recipe."""
 @app.delete("/recipes/<int:recipe_id>")
 def delete_recipe(recipe_id):
+    # 🔐 Require a valid Bearer token
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split()
+
+    if len(parts) != 2 or parts[0] != "Bearer":
+        return jsonify({"error": "authentication required"}), 401
+
+    token = parts[1]
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except PyJWTError:
+        return jsonify({"error": "invalid token"}), 401
+
+    user_id = payload.get("sub")
+    username = payload.get("username")
+    # (still no ownership checks yet)
+
+    # ⬇️ your existing delete logic here
     db = get_db()
     cur = db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     db.commit()
+
     if cur.rowcount == 0:
         return jsonify({"error": "recipe not found"}), 404
+
     return "", 204
 
 """Run the app."""
