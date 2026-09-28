@@ -93,7 +93,7 @@ def login():
     payload = {
     "sub": str(user["id"]),     # 👈 make subject a string
     "username": user["username"],
-    "exp": datetime.utcnow() + timedelta(seconds=60),
+    "exp": datetime.utcnow() + timedelta(minutes=55),
     }       
 
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
@@ -155,53 +155,44 @@ def get_recipe(recipe_id):
         return jsonify({"error": "recipe not found"}), 404
     return jsonify(recipe_to_dict(row))
 
-"""Create a new recipe."""
 @app.post("/recipes")
 def create_recipe():
     auth_header = request.headers.get("Authorization", "")
-    print("AUTH HEADER:", repr(auth_header))  # 👈 debug
-
     parts = auth_header.split()
-    print("PARTS:", parts)  # 👈 debug
 
     if len(parts) != 2 or parts[0] != "Bearer":
-        print("BAD FORMAT")  # 👈 debug
         return jsonify({"error": "authentication required"}), 401
 
     token = parts[1]
-    print("TOKEN START:", token[:40], "LEN:", len(token))  # 👈 debug
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        print("DECODED PAYLOAD:", payload)  # 👈 debug
-    except PyJWTError as e:
-        print("JWT ERROR TYPE:", type(e), "MSG:", str(e))  # 👈 debug
+    except PyJWTError:
         return jsonify({"error": "invalid token"}), 401
 
-    user_id = int(payload.get("sub"))  # or just leave as string
-    username = payload.get("username")
+    user_id = int(payload.get("sub"))
 
-    # (no ownership checks yet, just proving we *know* who's calling)
-
-    # ⬇️ your existing recipe creation logic
     data = request.get_json(silent=True)
     if not data or not data.get("title") or not data.get("ingredients"):
         return jsonify({"error": "title and ingredients are required"}), 400
+
     db = get_db()
     try:
         cur = db.execute(
-            "INSERT INTO recipes (title, ingredients, instructions, is_public)"
-            " VALUES (?, ?, ?, ?)",
+            "INSERT INTO recipes (title, ingredients, instructions, is_public, owner_id)"
+            " VALUES (?, ?, ?, ?, ?)",
             (
                 data["title"],
                 data["ingredients"],
                 data.get("instructions", ""),
                 1 if data.get("is_public", True) else 0,
+                user_id,  # 👈 from token
             ),
         )
         db.commit()
     except sqlite3.IntegrityError:
         return jsonify({"error": "a recipe with that title already exists"}), 409
+
     row = db.execute(
         "SELECT * FROM recipes WHERE id = ?", (cur.lastrowid,)
     ).fetchone()
@@ -210,7 +201,6 @@ def create_recipe():
 """Update an existing recipe."""
 @app.patch("/recipes/<int:recipe_id>")
 def update_recipe(recipe_id):
-    # 🔐 Require a valid Bearer token
     auth_header = request.headers.get("Authorization", "")
     parts = auth_header.split()
 
@@ -226,14 +216,27 @@ def update_recipe(recipe_id):
     except PyJWTError:
         return jsonify({"error": "invalid token"}), 401
 
-    user_id = payload.get("sub")
-    username = payload.get("username")
-    # (we're not using these yet for ownership — just proving identity)
+    user_id = int(payload.get("sub"))
 
-    # ⬇️ existing update logic
+    db = get_db()
+    # 1️⃣ Load the recipe first
+    recipe = db.execute(
+        "SELECT * FROM recipes WHERE id = ?",
+        (recipe_id,),
+    ).fetchone()
+
+    if recipe is None:
+        return jsonify({"error": "recipe not found"}), 404
+
+    # 2️⃣ Enforce ownership
+    if recipe["owner_id"] != user_id:
+        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
+
+    # 3️⃣ Existing update logic
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "a JSON body is required"}), 400
+
     fields, values = [], []
     for column in ("title", "ingredients", "instructions"):
         if column in data:
@@ -242,19 +245,21 @@ def update_recipe(recipe_id):
     if "is_public" in data:
         fields.append("is_public = ?")
         values.append(1 if data["is_public"] else 0)
+
     if not fields:
         return jsonify({"error": "nothing to update"}), 400
+
     values.append(recipe_id)
-    db = get_db()
+
     try:
         cur = db.execute(
-            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?", values
+            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?",
+            values,
         )
         db.commit()
     except sqlite3.IntegrityError:
         return jsonify({"error": "a recipe with that title already exists"}), 409
-    if cur.rowcount == 0:
-        return jsonify({"error": "recipe not found"}), 404
+
     row = db.execute(
         "SELECT * FROM recipes WHERE id = ?", (recipe_id,)
     ).fetchone()
@@ -277,17 +282,26 @@ def delete_recipe(recipe_id):
     except PyJWTError:
         return jsonify({"error": "invalid token"}), 401
 
-    user_id = payload.get("sub")
-    username = payload.get("username")
-    # (still no ownership checks yet)
+    user_id = int(payload.get("sub"))
 
-    # ⬇️ your existing delete logic here
     db = get_db()
+
+    # 1️⃣ Load the recipe first
+    recipe = db.execute(
+        "SELECT * FROM recipes WHERE id = ?",
+        (recipe_id,),
+    ).fetchone()
+
+    if recipe is None:
+        return jsonify({"error": "recipe not found"}), 404
+
+    # 2️⃣ Enforce ownership
+    if recipe["owner_id"] != user_id:
+        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
+
+    # 3️⃣ Only owner can delete
     cur = db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
     db.commit()
-
-    if cur.rowcount == 0:
-        return jsonify({"error": "recipe not found"}), 404
 
     return "", 204
 
