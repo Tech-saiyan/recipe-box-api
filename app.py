@@ -1,8 +1,27 @@
 """Recipe Box API — BE104 course skeleton.
 
-A working Flask + SQLite CRUD API for recipes. It stores data perfectly —
-and it trusts everyone. There is no authentication and no authorization yet.
-That is the point: you will add both, lesson by lesson, in Units 2 and 3.
+Authorization model for recipes:
+
+- Every recipe has an `owner_id` that points to the user who created it.
+- When a logged-in user creates a recipe, we take their user ID from the
+  verified JWT `sub` claim and store it as `owner_id`. The client cannot
+  choose or change this.
+
+- For update and delete:
+    1. Authenticate the request (Bearer token + JWT verification).
+    2. Load the target recipe from the database.
+    3. If the recipe doesn't exist, return 404.
+    4. Compare `recipe.owner_id` to the user ID from the token.
+       - If they differ -> return 403 Forbidden (user is authenticated but
+         not allowed to modify/delete this resource).
+       - If they match -> perform the update or delete.
+
+- 401 Unauthorized = token missing/invalid/expired (we don't know who you are).
+- 403 Forbidden   = token valid but user doesn't own the resource
+                    (we know who you are; you still can't do this).
+
+This prevents one authenticated user from changing or deleting another
+user's recipes.
 """
 
 import sqlite3
@@ -72,17 +91,21 @@ def register():
 def login():
     data = request.get_json(silent=True) or {}
 
+    # Strip whitespace and handle None values
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
 
+    # Check for missing username or password
     if not username or not password:
         return jsonify({"error": "username and password are required"}), 400
 
+    # Query the database for the user by username
     db = get_db()
     cursor = db.execute(
-        "SELECT id, username, password_hash FROM users WHERE username = ?",
-        (username,),
-    )
+    "SELECT id, username, password_hash, role FROM users WHERE username = ?",
+    (username,),
+)
+
     user = cursor.fetchone()
 
     # Unknown username or wrong password → same 401 response
@@ -91,10 +114,11 @@ def login():
 
     # ✅ Success: issue a signed JWT carrying identity + expiry
     payload = {
-    "sub": str(user["id"]),     # 👈 make subject a string
+    "sub": str(user["id"]),
     "username": user["username"],
+    "role": user["role"],  # 👈 new claim
     "exp": datetime.utcnow() + timedelta(minutes=55),
-    }       
+    }      
 
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
@@ -157,6 +181,15 @@ def get_recipe(recipe_id):
 
 @app.post("/recipes")
 def create_recipe():
+    """
+    Create a new recipe owned by the authenticated user.
+
+    - Requires a valid Bearer token.
+    - Extracts user ID from the JWT `sub` claim.
+    - Inserts a recipe row with `owner_id` set to that user ID.
+    - The client cannot set or override `owner_id`.
+    """
+
     auth_header = request.headers.get("Authorization", "")
     parts = auth_header.split()
 
@@ -201,6 +234,18 @@ def create_recipe():
 """Update an existing recipe."""
 @app.patch("/recipes/<int:recipe_id>")
 def update_recipe(recipe_id):
+    """
+    Update a recipe only if the caller owns it.
+
+    Steps:
+    1. Authenticate the request (Bearer token + JWT verify).
+    2. Load the recipe by `recipe_id`.
+       - If not found -> 404.
+    3. Check `recipe.owner_id` against user ID from JWT.
+       - If mismatch -> 403 Forbidden.
+    4. If owner -> apply requested field updates.
+    """
+
     auth_header = request.headers.get("Authorization", "")
     parts = auth_header.split()
 
@@ -217,6 +262,7 @@ def update_recipe(recipe_id):
         return jsonify({"error": "invalid token"}), 401
 
     user_id = int(payload.get("sub"))
+    role = payload.get("role")
 
     db = get_db()
     # 1️⃣ Load the recipe first
@@ -228,8 +274,8 @@ def update_recipe(recipe_id):
     if recipe is None:
         return jsonify({"error": "recipe not found"}), 404
 
-    # 2️⃣ Enforce ownership
-    if recipe["owner_id"] != user_id:
+    # 2️⃣ Enforce ownership and determine role
+    if recipe["owner_id"] != user_id and role != "admin":
         return jsonify({"error": "forbidden: you do not own this recipe"}), 403
 
     # 3️⃣ Existing update logic
@@ -268,6 +314,17 @@ def update_recipe(recipe_id):
 """Delete a recipe."""
 @app.delete("/recipes/<int:recipe_id>")
 def delete_recipe(recipe_id):
+    """
+    Delete a recipe only if the caller owns it.
+
+    Steps:
+    1. Authenticate via Bearer token + JWT.
+    2. Load the recipe:
+       - If not found -> 404.
+    3. If `owner_id` != user ID from token -> 403 Forbidden.
+    4. If owner -> delete the recipe and return 204 No Content.
+    """
+    
     # 🔐 Require a valid Bearer token
     auth_header = request.headers.get("Authorization", "")
     parts = auth_header.split()
@@ -283,6 +340,7 @@ def delete_recipe(recipe_id):
         return jsonify({"error": "invalid token"}), 401
 
     user_id = int(payload.get("sub"))
+    role = payload.get("role")
 
     db = get_db()
 
@@ -295,8 +353,8 @@ def delete_recipe(recipe_id):
     if recipe is None:
         return jsonify({"error": "recipe not found"}), 404
 
-    # 2️⃣ Enforce ownership
-    if recipe["owner_id"] != user_id:
+    # 2️⃣ Enforce ownership and determine role
+    if recipe["owner_id"] != user_id and role != "admin":
         return jsonify({"error": "forbidden: you do not own this recipe"}), 403
 
     # 3️⃣ Only owner can delete
