@@ -1,9 +1,6 @@
 # Recipe Box API
 
-A small, working Flask + SQLite API for keeping recipes. Full CRUD, clean
-status codes - and **no authentication at all**. Anyone who can reach it can
-read, change, or delete anything. In BE104 you fix that: real users, hashed
-passwords, JSON Web Tokens, ownership rules, and middleware.
+A small, working Flask + SQLite API for keeping recipes. Full CRUD, clean. Status codes with real users, hashed passwords, JSON Web Tokens, ownership rules, and middleware.
 
 ## Run it
 
@@ -30,7 +27,7 @@ curl -X DELETE http://127.0.0.1:5000/recipes/1
 |---|---|---|---|
 | GET | /recipes | 200 | |
 | GET | /recipes/&lt;id&gt; | 200 | 404 |
-| POST | /recipes | 201 | 400 bad body · 409 duplicate title |
+| POST | /recipes | 201 | 400 bad body · 404 · 409 duplicate title |
 | PATCH | /recipes/&lt;id&gt; | 200 | 400 · 404 · 409 |
 | DELETE | /recipes/&lt;id&gt; | 204 | 404 |
 
